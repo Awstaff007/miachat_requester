@@ -5,8 +5,10 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 
 class LogScreen extends StatefulWidget {
+  const LogScreen({super.key}); // Aggiunto super.key
+
   @override
-  _LogScreenState createState() => _LogScreenState();
+  State<LogScreen> createState() => _LogScreenState();
 }
 
 class _LogScreenState extends State<LogScreen> {
@@ -72,10 +74,7 @@ class _LogScreenState extends State<LogScreen> {
       _isClearingLog = true; // Inizia cancellazione
     });
     try {
-      final directory = await getApplicationDocumentsDirectory();
-      final path = '${directory.path}/app_log.txt';
-      final file = File(path);
-
+      final file = await _logFile;
       if (await file.exists()) {
         await file.writeAsString('');
       }
@@ -151,6 +150,11 @@ class _LogScreenState extends State<LogScreen> {
     _loadPaginatedLogs();
   }
 
+  Future<File> get _logFile async { // Aggiunto
+    final directory = await getApplicationDocumentsDirectory();
+    return File('${directory.path}/app_log.txt');
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -169,14 +173,23 @@ class _LogScreenState extends State<LogScreen> {
           Column(
             children: [
               Expanded(
-                child: ListView.builder(
-                  controller: _scrollController,
-                  itemCount: _paginatedLogs.length + (_isLoadingMore ? 1 : 0),
-                  itemBuilder: (ctx, i) {
-                    if (i >= _paginatedLogs.length) {
-                      return Center(child: CircularProgressIndicator());
+                child: FutureBuilder<File>( // Integrato FutureBuilder
+                  future: _logFile, // Utilizzo _logFile per ottenere il file
+                  builder: (context, snapshot) {
+                    if (snapshot.hasData) {
+                      return StreamBuilder<String>(
+                        stream: snapshot.data!.openRead().transform(utf8.decoder),
+                        builder: (context, snapshot) {
+                          if (snapshot.hasData) {
+                            _logContent = snapshot.data!; // Aggiorna _logContent
+                            _loadPaginatedLogs(); // Carica i log paginati
+                            return _buildLogList(_logContent);
+                          }
+                          return const CircularProgressIndicator();
+                        },
+                      );
                     }
-                    return Text(_paginatedLogs[i]);
+                    return const CircularProgressIndicator();
                   },
                 ),
               ),
@@ -213,6 +226,22 @@ class _LogScreenState extends State<LogScreen> {
             ),
         ],
       ),
+    );
+  }
+
+  Widget _buildLogList(String logs) { // Aggiornato
+    return ListView.builder(
+      controller: _scrollController,
+      itemCount: _paginatedLogs.length + (_isLoadingMore ? 1 : 0),
+      itemBuilder: (context, index) {
+        if (index >= _paginatedLogs.length) {
+          return Center(child: CircularProgressIndicator());
+        }
+        final logEntry = _paginatedLogs[index];
+        return ListTile(
+          title: Text(logEntry),
+        );
+      },
     );
   }
 }

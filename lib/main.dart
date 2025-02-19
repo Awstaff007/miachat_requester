@@ -1,4 +1,4 @@
-// #### **lib/main.dart**
+// lib/main.dart
 
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -7,11 +7,25 @@ import 'home_screen.dart';
 import 'log_screen.dart';
 import 'notification_service.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'components/error_boundary.dart'; // Aggiunto
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
-  await NotificationService().init();
+  
+  try {
+    await Firebase.initializeApp(
+      options: const FirebaseOptions(
+        apiKey: 'AIzaSy...',
+        appId: '1:123...',
+        messagingSenderId: '123...',
+        projectId: 'miachat-...',
+      ),
+    );
+  } catch (e) {
+    print('Firebase initialization error: $e');
+  }
+  
+  await NotificationService().init(); // Inizializzazione NotificationService
 
   // Error boundary globale
   FlutterError.onError = (details) {
@@ -21,12 +35,16 @@ void main() async {
     );
   };
 
-  runApp(ErrorBoundary(
-    fallback: (error, stack) => Material(
-      child: Center(child: Text('Errore critico: ${error.toString()}')),
+  runApp(
+    ErrorBoundary(
+      fallback: (error, stack) => Material(
+        child: Center(
+          child: Text('Errore critico: ${error.toString()}'),
+        ),
+      ),
+      child: const MyApp(),
     ),
-    child: MyApp(),
-  ));
+  );
 }
 
 class MyApp extends StatelessWidget {
@@ -63,7 +81,7 @@ class MyApp extends StatelessWidget {
         '/logs': (context) => LogScreen(),
         '/help': (context) => HelpScreen(),
       },
-      onGenerateRoute: (settings) {  // Aggiunto onGenerateRoute
+      onGenerateRoute: (settings) {
         switch (settings.name) {
           case '/home':
             return SlideRightRoute(page: HomeScreen());

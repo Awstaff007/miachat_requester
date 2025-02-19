@@ -1,5 +1,7 @@
-import 'package:firebase_messaging/firebase_messaging.dart';
+// lib/notification_service.dart
+
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:flutter/material.dart';
 import 'dart:convert'; // Importa la libreria JSON
@@ -7,12 +9,14 @@ import 'dart:convert'; // Importa la libreria JSON
 class NotificationService {
   static final FlutterLocalNotificationsPlugin _flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
   static final FirebaseMessaging _firebaseMessaging = FirebaseMessaging.instance;
-  
+  static final BehaviorSubject<String> _notificationStream = BehaviorSubject(); // Aggiunto
+
   // Aggiunta gestione azioni e stati
   static final onNotificationClick = BehaviorSubject<String>();
   static final _notificationClickController = BehaviorSubject<String>();
 
   static Stream<String> get notificationClicks => _notificationClickController.stream;
+  static Stream<String> get notifications => _notificationStream.stream; // Aggiunto
 
   Future<void> init() async {
     // Richiedi permessi per iOS
@@ -41,7 +45,12 @@ class NotificationService {
       iOS: initializationSettingsIOS
     );
 
-    await _flutterLocalNotificationsPlugin.initialize(initializationSettings);
+    await _flutterLocalNotificationsPlugin.initialize(
+      initializationSettings,
+      onDidReceiveNotificationResponse: (details) { // Aggiunto
+        _notificationStream.add(details.payload ?? ''); // Aggiunto
+      }
+    );
 
     // Configurazione click notifiche
     _flutterLocalNotificationsPlugin.getNotificationAppLaunchDetails().then((details) {
@@ -69,10 +78,35 @@ class NotificationService {
   // Gestione notifiche in background (Firebase) - Funzione statica
   static Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     await Firebase.initializeApp();
-    final notificationService = NotificationService();
-    await notificationService.init();
-    notificationService._handleBackgroundMessage(message);
+    _showNotification(message); // Modificato
   }
+
+  static Future<void> _handleBackgroundMessage(RemoteMessage message) async { // Aggiunto
+    await Firebase.initializeApp(); // Aggiunto
+    _showNotification(message); // Aggiunto
+  } // Aggiunto
+
+  static void _handleForegroundMessage(RemoteMessage message) { // Aggiunto
+    _showNotification(message); // Aggiunto
+  } // Aggiunto
+
+  static void _showNotification(RemoteMessage message) { // Aggiunto
+    _flutterLocalNotificationsPlugin.show(
+      message.hashCode,
+      message.notification?.title,
+      message.notification?.body,
+      NotificationDetails(
+        android: AndroidNotificationDetails(
+          'main_channel',
+          'Main Notifications',
+          icon: 'ic_notification',
+          color: Colors.blue,
+        ),
+        iOS: const DarwinNotificationDetails(),
+      ),
+      payload: jsonEncode(message.data),
+    );
+  } // Aggiunto
 
   Future<void> sendNotification(String title, String body, {String type = 'info', String? payload}) async { // Aggiunto parametro payload
     const AndroidNotificationDetails androidNotificationDetails = AndroidNotificationDetails(

@@ -3,35 +3,36 @@
 import 'dart:async';
 
 class CircuitBreaker {
-  final int maxFailures;
-  final Duration cooldownDuration;
   int _failureCount = 0;
-  bool _isBreakerActive = false;
+  bool _isActive = false;
   Timer? _cooldownTimer;
+  
+  static const int _maxFailures = 5;
+  static const Duration _cooldown = Duration(minutes: 30);
 
-  CircuitBreaker({
-    this.maxFailures = 5,
-    this.cooldownDuration = const Duration(minutes=30)
-  });
-
-  void recordFailure() {
-    _failureCount++;
-    if (!_isBreakerActive && _failureCount >= maxFailures) {
-      _activateBreaker();
-    }
-  }
+  bool get isActive => _isActive;
 
   void recordSuccess() => _failureCount = 0;
 
-  bool get isActive => _isBreakerActive;
-
-  void _activateBreaker() {
-    _isBreakerActive = true;
-    _cooldownTimer = Timer(cooldownDuration, () {
-      _isBreakerActive = false;
-      _failureCount = 0;
-    });
+  void recordFailure() {
+    _failureCount++;
+    if (_failureCount >= _maxFailures && !_isActive) {
+      _activate();
+    }
   }
 
-  void dispose() => _cooldownTimer?.cancel();
+  void _activate() {
+    _isActive = true;
+    _cooldownTimer = Timer(_cooldown, _reset);
+  }
+
+  void _reset() {
+    _isActive = false;
+    _failureCount = 0;
+    _cooldownTimer?.cancel();
+  }
+
+  void dispose() {
+    _cooldownTimer?.cancel();
+  }
 }

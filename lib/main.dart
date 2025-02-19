@@ -1,39 +1,21 @@
-// lib/main.dart
-
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'login_screen.dart';
 import 'home_screen.dart';
-import 'log_screen.dart';
-import 'notification_service.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'components/error_boundary.dart'; // Aggiunto
+import 'components/error_boundary.dart';
+import 'config/firebase_config.dart'; // File di configurazione esterno
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
   try {
     await Firebase.initializeApp(
-      options: const FirebaseOptions(
-        apiKey: 'AIzaSy...',
-        appId: '1:123...',
-        messagingSenderId: '123...',
-        projectId: 'miachat-...',
-      ),
+      options: DefaultFirebaseOptions.currentPlatform,
     );
   } catch (e) {
-    print('Firebase initialization error: $e');
+    debugPrint('Firebase initialization error: $e');
   }
-  
-  await NotificationService().init(); // Inizializzazione NotificationService
-
-  // Error boundary globale
-  FlutterError.onError = (details) {
-    ErrorBoundary.of(details.context as BuildContext)?.catchError(
-      details.exception,
-      details.stack ?? StackTrace.empty,
-    );
-  };
 
   runApp(
     ErrorBoundary(
@@ -48,119 +30,49 @@ void main() async {
 }
 
 class MyApp extends StatelessWidget {
-  final storage = FlutterSecureStorage();
-
-  Future<bool> _checkLogin() async {
-    String? apiKey = await storage.read(key: 'apiKey');
-    return apiKey != null;
-  }
+  const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final bool _isDarkMode = MediaQuery.of(context).platformBrightness == Brightness.dark;
-
+    const storage = FlutterSecureStorage();
+    
     return MaterialApp(
-      title: 'DeepSeek App',
-      theme: _isDarkMode ? ThemeData.dark() : ThemeData.light(),
+      title: 'miachat App',
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.blue,
+          brightness: MediaQuery.of(context).platformBrightness,
+        ),
+        useMaterial3: true,
+      ),
       home: FutureBuilder<bool>(
-        future: _checkLogin(),
+        future: _checkLoginStatus(storage),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
-            return Scaffold(body: Center(child: CircularProgressIndicator()));
+            return const Scaffold(
+              body: Center(child: CircularProgressIndicator()),
+            );
           }
-          if (snapshot.data == true) {
-            return HomeScreen();
-          } else {
-            return LoginScreen();
-          }
+          return snapshot.data == true 
+              ? const HomeScreen() 
+              : const LoginScreen();
         },
       ),
       routes: {
-        '/home': (context) => HomeScreen(),
-        '/login': (context) => LoginScreen(),
-        '/logs': (context) => LogScreen(),
-        '/help': (context) => HelpScreen(),
-      },
-      onGenerateRoute: (settings) {
-        switch (settings.name) {
-          case '/home':
-            return SlideRightRoute(page: HomeScreen());
-          case '/logs':
-            return FadeRoute(page: LogScreen());
-          default:
-            return MaterialPageRoute(builder: (_) => LoginScreen());
-        }
+        '/home': (context) => const HomeScreen(),
+        '/login': (context) => const LoginScreen(),
+        '/logs': (context) => const LogScreen(),
+        '/help': (context) => const HelpScreen(),
       },
     );
   }
-}
 
-// Error boundary class
-class ErrorBoundary extends StatefulWidget {
-  final Widget child;
-  final Widget Function(Object error, StackTrace stack) fallback;
-
-  ErrorBoundary({required this.child, required this.fallback});
-
-  static _ErrorBoundaryState? of(BuildContext context) {
-    return context.findAncestorStateOfType<_ErrorBoundaryState>();
-  }
-
-  @override
-  _ErrorBoundaryState createState() => _ErrorBoundaryState();
-}
-
-class _ErrorBoundaryState extends State<ErrorBoundary> {
-  Object? _error;
-  StackTrace? _stack;
-
-  void catchError(Object error, StackTrace stack) {
-    setState(() {
-      _error = error;
-      _stack = stack;
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_error != null) {
-      return widget.fallback(_error!, _stack!);
+  Future<bool> _checkLoginStatus(FlutterSecureStorage storage) async {
+    try {
+      return await storage.containsKey(key: 'apiKey');
+    } catch (e) {
+      debugPrint('Error checking login status: $e');
+      return false;
     }
-    return widget.child;
   }
-}
-
-// Definizione delle animazioni personalizzate
-class SlideRightRoute extends PageRouteBuilder {
-  final Widget page;
-  SlideRightRoute({required this.page})
-      : super(
-          pageBuilder: (context, animation, secondaryAnimation) => page,
-          transitionsBuilder: (context, animation, secondaryAnimation, child) {
-            const begin = Offset(1.0, 0.0);
-            const end = Offset.zero;
-            const curve = Curves.ease;
-
-            final tween = Tween(begin: begin, end: end).chain(CurveTween(curve: curve));
-
-            return SlideTransition(
-              position: animation.drive(tween),
-              child: child,
-            );
-          },
-        );
-}
-
-class FadeRoute extends PageRouteBuilder {
-  final Widget page;
-  FadeRoute({required this.page})
-      : super(
-          pageBuilder: (context, animation, secondaryAnimation) => page,
-          transitionsBuilder: (context, animation, secondaryAnimation, child) {
-            return FadeTransition(
-              opacity: animation,
-              child: child,
-            );
-          },
-        );
 }

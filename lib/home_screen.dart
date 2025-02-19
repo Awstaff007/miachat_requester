@@ -1,18 +1,16 @@
 // #### **lib/home_screen.dart**
 
 import 'package:flutter/material.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'dart:async';
 import 'package:http/http.dart' as http;
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:path_provider/path_provider.dart';
 import 'dart:convert';
+import 'dart:io';
+import 'utils/circuit_breaker.dart';
 import 'notification_service.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'log_screen.dart';
 import 'help_screen.dart';
-import 'package:path_provider/path_provider.dart'; // <-- Aggiunto
-import 'dart:io';
 
-// Modificato widget ListTile a componente riutilizzabile
 class SettingsSwitchTile extends StatelessWidget {
   final String title;
   final String subtitle;
@@ -41,144 +39,93 @@ class SettingsSwitchTile extends StatelessWidget {
 }
 
 class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key});
+
   @override
-  _HomeScreenState createState() => _HomeScreenState();
+  State<HomeScreen> createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final _storage = FlutterSecureStorage();
-  final NotificationService _notificationService = NotificationService();
+  final CircuitBreaker _circuitBreaker = CircuitBreaker();
+  final _storage = const FlutterSecureStorage();
   final _scrollController = ScrollController();
-
+  final _questionController = TextEditingController();
+  final _conversationIdController = TextEditingController();
+  
+  Timer? _requestTimer;
   bool _isPaused = false;
-  bool _incrementalBackoff = true;
-  int _customInterval = 5;
-  int _currentInterval = 1;
-  int _maxInterval = 30;
-  int _maxRetries = 10;
-  int _retryCount = 0;
-
-  String _conversationId = '';
-  List<String> _errorMessages = ['The server is busy. Please try again later.'];
-  Timer? _timer;
   bool _continueConversation = false;
-
-  String _question = 'La tua domanda qui';
-
-  // Circuit Breaker Pattern
-  bool _circuitBreakerActive = false;
-  int _failureCount = 0;
-  final int _maxFailures = 5;
-  Timer? _circuitBreakerTimer; // Timer per il circuit breaker
-
-  bool _darkModeEnabled = false;
-  final CircuitBreaker _circuitBreaker = CircuitBreaker(
-    maxFailures: 5,
-    cooldownDuration: Duration(minutes: 30),
-  );
+  String _currentStatus = 'In attesa di iniziare...';
+  
+  int _retryCount = 0;
+  final int _maxRetries = 10;
+  bool _incrementalBackoff = true;
+  int _currentInterval = 1;
+  final int _maxInterval = 30;
+  final int _customInterval = 5;
 
   @override
   void initState() {
     super.initState();
     _loadPreferences();
-    _loadDarkModePreference();
     _startRequestCycle();
+    NotificationService.notifications.listen(_handleNotification);
   }
 
   Future<void> _loadPreferences() async {
-    // ... (unchanged)
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _questionController.text = prefs.getString('question') ?? '';
+      _conversationIdController.text = prefs.getString('conversationId') ?? '';
+      _continueConversation = prefs.getBool('continueConversation') ?? false;
+      _incrementalBackoff = prefs.getBool('incrementalBackoff') ?? true;
+    });
   }
 
   void _savePreferences() async {
-    // ... (unchanged)
-  }
-
-  Future<void> _loadDarkModePreference() async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    setState(() => _darkModeEnabled = prefs.getBool('darkMode') ?? false);
-  }
-
-  Future<void> _toggleDarkMode(bool value) async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    setState(() => _darkModeEnabled = value);
-    await prefs.setBool('darkMode', value);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('incrementalBackoff', _incrementalBackoff);
   }
 
   void _startRequestCycle() {
     _retryCount = 0;
     _currentInterval = _incrementalBackoff ? 1 : _customInterval;
-    _timer?.cancel();
+    _requestTimer?.cancel();
     _sendRequest();
   }
 
   Future<void> _sendRequest() async {
-    if (_isPaused || _retryCount >= _maxRetries || _circuitBreaker.isActive) {
-      _showErrorDialog('Circuit breaker attivo. Riprova tra ${_circuitBreaker.remainingCooldown}');
-      return;
-    }
+    if (_isPaused || _circuitBreaker.isActive) return;
 
     try {
-      // ... codice richiesta esistente ...
-      final response = await http.post(url, headers: headers, body: body);
+      final response = await http.post(
+        Uri.parse('https://api.miachat.com/chat/completions'),
+        headers: await _getHeaders(),
+        body: jsonEncode(_buildRequestBody()),
+      );
 
       if (response.statusCode == 200) {
-        // ... (success handling - unchanged)
-        _circuitBreaker.recordSuccess();
-        _failureCount = 0; // Reset failure count on success
+        _handleSuccess(response.body);
       } else {
-        await _logToFile('Errore API: ${response.body}');
-        _circuitBreaker.recordFailure();
-        _checkCircuitBreakerStatus();
-        _failureCount++; // Increment failure count on error
-        _retryCount++;
+        _handleError(response.statusCode, response.body);
         _applyBackoff();
       }
     } catch (e) {
-      print('Errore di rete: $e');
-      await _logToFile('Errore di rete: $e');
-      await _notificationService.sendNotification(
-        'Errore di Rete',
-        'Si è verificato un errore di rete.',
-      );
-      _circuitBreaker.recordFailure();
-      _checkCircuitBreakerStatus();
-      _failureCount++; // Increment failure count on network error
-      _retryCount++;
+      _handleNetworkError(e);
       _applyBackoff();
     }
   }
 
-  void _checkCircuitBreakerStatus() {
-    if (_circuitBreaker.isActive) {
-      _notificationService.sendNotification(
-        'Circuit Breaker Attivato',
-        'Riprendiamo tra 30 minuti',
-        type: 'error',
-      );
-    }
-  }
-
   void _applyBackoff() {
-    // ... (unchanged)
+    if (_retryCount >= _maxRetries) return;
+    _retryCount++;
+    _currentInterval = _incrementalBackoff
+        ? (_currentInterval < _maxInterval ? _currentInterval * 2 : _maxInterval)
+        : _customInterval;
+    _requestTimer = Timer(Duration(minutes: _currentInterval), _sendRequest);
   }
 
-  void _scheduleNextRequest() {
-    // ... (unchanged)
-  }
-
-  void _pauseRequests() {
-    // ... (unchanged)
-  }
-
-  void _exitApp() {
-    // ... (unchanged)
-  }
-
-  void _showErrorDialog(String message) {
-    // ... (unchanged)
-  }
-
-  Future<void> _logToFile(String message) async {
+  void _logToFile(String message) async {
     final directory = await getApplicationDocumentsDirectory();
     final path = '${directory.path}/app_log.txt';
     final file = File(path);
@@ -186,110 +133,14 @@ class _HomeScreenState extends State<HomeScreen> {
     await file.writeAsString('[$timestamp] $message\n', mode: FileMode.append);
   }
 
-  void _navigateToLogs() {
-    // ... (unchanged)
-  }
-
-  void _navigateToHelp() {
-    // ... (unchanged)
-  }
+  // ... metodi rimanenti invariati ...
 
   @override
   void dispose() {
-    _timer?.cancel();
-    _circuitBreakerTimer?.cancel(); // Cancel the circuit breaker timer
-    _savePreferences();
+    _requestTimer?.cancel();
+    _circuitBreaker.dispose();
+    _questionController.dispose();
+    _conversationIdController.dispose();
     super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text('Home'),
-      ),
-      body: SingleChildScrollView(
-        controller: _scrollController,
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          children: [
-            SettingsSwitchTile( // Componente riutilizzabile
-              title: 'Backoff Esponenziale',
-              subtitle: 'Incrementa l\'intervallo tra i tentativi dopo ogni errore.',
-              value: _incrementalBackoff,
-              onChanged: (value) {
-                setState(() {
-                  _incrementalBackoff = value;
-                  _savePreferences();
-                });
-              },
-            ),
-            SwitchListTile(
-              title: Text('Dark Mode'),
-              value: _darkModeEnabled,
-              onChanged: _toggleDarkMode,
-            ),
-            ListView.builder(
-              shrinkWrap: true,
-              physics: NeverScrollableScrollPhysics(),
-              itemCount: _errorMessages.length,
-              itemBuilder: (context, index) => ErrorMessageItem(
-                message: _errorMessages[index],
-              ),
-            ),
-            // ... (rest of the UI - unchanged)
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showInfoDialog(String message) {
-    // ... (unchanged)
-  }
-}
-
-// Classe Circuit Breaker
-class CircuitBreaker {
-  final int maxFailures;
-  final Duration cooldownDuration;
-  int _failureCount = 0;
-  DateTime? _cooldownStart;
-
-  CircuitBreaker({required this.maxFailures, required this.cooldownDuration});
-
-  bool get isActive => _failureCount >= maxFailures;
-
-  Duration? get remainingCooldown {
-    if (_cooldownStart == null) return null;
-    final elapsed = DateTime.now().difference(_cooldownStart!);
-    return elapsed < cooldownDuration ? cooldownDuration - elapsed : null;
-  }
-
-  void recordFailure() {
-    _failureCount++;
-    if (isActive) {
-      _cooldownStart = DateTime.now();
-    }
-  }
-
-  void recordSuccess() {
-    _failureCount = 0;
-    _cooldownStart = null;
-  }
-}
-
-// Widget ottimizzato
-class ErrorMessageItem extends StatelessWidget {
-  const ErrorMessageItem({required this.message});
-
-  final String message;
-
-  @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      title: Text(message),
-      trailing: const Icon(Icons.delete),
-    );
   }
 }
